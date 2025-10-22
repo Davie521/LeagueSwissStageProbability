@@ -14,8 +14,7 @@ import time
 
 from .worlds_2025_data import (
     load_current_swiss_stage,
-    get_next_round_matchups,
-    get_team_stats
+    get_next_round_matchups
 )
 from .swiss_engine import ProbabilityCalculator
 
@@ -353,267 +352,6 @@ def calculate_single_matchup():
         console.print(traceback.format_exc(), style="dim", markup=False)
 
 
-def calculate_all_matchups():
-    """计算某队所有可能的对手概率"""
-    stage = load_current_swiss_stage()
-    calculator = ProbabilityCalculator(stage)
-
-    # 获取活跃队伍
-    active_teams = [t.name for t in stage.get_active_teams()]
-
-    if not active_teams:
-        console.print("[red]当前没有活跃的队伍！[/red]")
-        return
-
-    console.print("\n[bold]当前仍在比赛的队伍:[/bold]")
-    for i, team in enumerate(active_teams, 1):
-        team_obj = stage.get_team_by_name(team)
-        console.print(f"  {i}. {team} ({team_obj.record})")
-
-    team_name = get_team_input("\n请输入队伍名称或序号", active_teams)
-
-    try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task("[cyan]计算所有可能对手的概率...", total=None)
-
-            # 第一步：先计算所有对手（不提供胜率）
-            probabilities = calculator.calculate_all_matchup_probabilities(team_name)
-
-            progress.update(task, completed=100)
-
-        # 检查是否有需要交互式输入的情况
-        need_interactive = any(result.get('need_interactive') for result in probabilities.values())
-
-        if need_interactive:
-            console.print(f"\n[bold yellow]⚠️  检测到部分对手需要交互式计算[/bold yellow]\n")
-
-            # 收集所有影响因素的比赛（去重）
-            all_impact_matches = {}
-            for opponent, result in probabilities.items():
-                if result.get('need_interactive'):
-                    interactive_data = result['interactive_data']
-                    for match in interactive_data.get('impact_matches', []):
-                        match_key = tuple(sorted([match['team1'], match['team2']]))
-                        if match_key not in all_impact_matches:
-                            all_impact_matches[match_key] = match
-
-            if all_impact_matches:
-                console.print("[bold magenta]以下待定比赛会影响计算结果：[/bold magenta]\n")
-                for i, (match_key, match) in enumerate(all_impact_matches.items(), 1):
-                    console.print(f"  {i}. [cyan]{match['team1']} vs {match['team2']}[/cyan]")
-                    console.print(f"     当前战绩: {match['team1_record']} vs {match['team2_record']}")
-
-                console.print("\n" + "━"*60)
-                console.print("[bold yellow]请输入各场比赛的胜率估算（这些胜率将用于所有相关计算）：[/bold yellow]\n")
-
-                # 收集胜率输入
-                win_probabilities = {}
-                for match_key, match in all_impact_matches.items():
-                    t1, t2 = match['team1'], match['team2']
-                    prompt_text = f"{t1} 战胜 {t2} 的概率 [0-100%，默认50]"
-                    prob_input = Prompt.ask(prompt_text, default="50")
-                    try:
-                        prob = float(prob_input) / 100.0
-                        prob = max(0.0, min(1.0, prob))  # 限制在 0-1
-                        win_probabilities[match_key] = prob
-                    except ValueError:
-                        console.print(f"[yellow]输入无效，使用默认值 50%[/yellow]")
-                        win_probabilities[match_key] = 0.5
-
-                console.print("\n" + "━"*60)
-                console.print("[cyan]正在重新计算所有对手概率...[/cyan]\n")
-
-                # 重新计算所有需要交互式输入的对手
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    console=console,
-                ) as progress:
-                    task = progress.add_task("[cyan]计算中...", total=None)
-
-                    for opponent, result in probabilities.items():
-                        if result.get('need_interactive'):
-                            # 使用共享的胜率输入重新计算
-                            interactive_data = result['interactive_data']
-                            final_result = calculator.calculate_cross_group_probability_interactive(
-                                team_name, opponent, win_probabilities,
-                                skip_current_record=result.get('reason', '').startswith('两队虽然战绩相同')
-                            )
-                            # 更新概率
-                            probabilities[opponent]['probability'] = final_result['weighted_probability']
-                            probabilities[opponent]['need_interactive'] = False
-
-                    progress.update(task, completed=100)
-
-        if probabilities:
-            # 按概率排序（从结果字典中提取 probability 字段）
-            sorted_probs = sorted(
-                probabilities.items(),
-                key=lambda x: x[1]['probability'],
-                reverse=True
-            )
-
-            table = Table(title=f"{team_name} 下一轮可能的对手", show_header=True)
-            table.add_column("对手", style="cyan", width=10)
-            table.add_column("战绩", style="dim", width=8)
-            table.add_column("概率", justify="right", style="yellow", width=10)
-            table.add_column("概率条", width=25)
-            table.add_column("说明", style="dim", width=20)
-
-            for opponent, result in sorted_probs:
-                prob = result['probability']
-
-                # 获取对手战绩
-                opponent_team = stage.get_team_by_name(opponent)
-                opponent_record = opponent_team.record if opponent_team else "?"
-
-                # 创建概率条
-                bar_length = int(prob * 25)
-                bar = "█" * bar_length + "░" * (25 - bar_length)
-
-                # 生成说明
-                explanation = ""
-                if result['same_group']:
-                    explanation = "同组"
-                elif result.get('need_interactive'):
-                    explanation = "需要交互式计算"
-                else:
-                    explanation = "跨组"
-
-                table.add_row(
-                    opponent,
-                    opponent_record,
-                    f"{prob:.1%}",
-                    f"[cyan]{bar}[/cyan]",
-                    explanation
-                )
-
-            console.print("\n")
-            console.print(table)
-        else:
-            console.print(f"[yellow]⚠️ {team_name} 没有可能的对手（可能已经晋级或淘汰）[/yellow]")
-
-    except Exception as e:
-        console.print(f"[red]错误: {escape(str(e))}[/red]")
-
-
-def simulate_advancement():
-    """模拟晋级概率"""
-    stage = load_current_swiss_stage()
-    calculator = ProbabilityCalculator(stage)
-
-    active_teams = [t.name for t in stage.get_active_teams()]
-
-    if not active_teams:
-        console.print("[red]当前没有活跃的队伍！[/red]")
-        return
-
-    console.print("\n[bold]当前仍在比赛的队伍:[/bold]")
-    for i, team in enumerate(active_teams, 1):
-        team_obj = stage.get_team_by_name(team)
-        console.print(f"  {i}. {team} ({team_obj.record})")
-
-    team_name = get_team_input("\n请输入要模拟的队伍名称或序号", active_teams)
-
-    try:
-        num_sims = int(Prompt.ask("模拟次数", default="10000"))
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task(f"[cyan]模拟 {num_sims} 次...", total=None)
-
-            result = calculator.simulate_advancement_probability(team_name, num_sims)
-
-            progress.update(task, completed=100)
-
-        team_obj = stage.get_team_by_name(team_name)
-
-        # 创建结果面板
-        content = f"""
-队伍: [bold cyan]{team_name}[/bold cyan]
-当前战绩: [yellow]{team_obj.record}[/yellow]
-
-[green]晋级概率: {result['qualify']:.1%}[/green]
-[red]淘汰概率: {result['eliminate']:.1%}[/red]
-
-基于 {num_sims} 次模拟
-        """
-
-        panel = Panel(content, title="模拟结果", border_style="green")
-        console.print("\n")
-        console.print(panel)
-
-    except Exception as e:
-        console.print(f"[red]错误: {escape(str(e))}[/red]")
-
-
-def view_team_details():
-    """查看队伍详情"""
-    stage = load_current_swiss_stage()
-
-    # 获取所有队伍（包括已晋级和已淘汰的）
-    all_teams = [t.name for t in stage.teams]
-
-    console.print("\n[bold]所有队伍:[/bold]")
-    for i, team in enumerate(all_teams, 1):
-        team_obj = stage.get_team_by_name(team)
-        if team_obj:
-            console.print(f"  {i}. {team} ({team_obj.record})")
-
-    team_name = get_team_input("\n请输入队伍名称或序号", all_teams)
-    stats = get_team_stats(team_name)
-
-    if not stats:
-        console.print(f"[red]队伍 {team_name} 不存在！[/red]")
-        return
-
-    # 创建详情面板
-    status = "⚔️ 比赛中"
-    if stats['is_qualified']:
-        status = "✅ 已晋级"
-    elif stats['is_eliminated']:
-        status = "❌ 已淘汰"
-
-    # 格式化比赛历史
-    history_text = ""
-    for i, (opponent, won) in enumerate(stats['match_history'], 1):
-        if won is None:
-            result = "-"
-            color = "bright_black"
-        elif won:
-            result = "✓"
-            color = "green"
-        else:
-            result = "✗"
-            color = "red"
-        history_text += f"  第{i}轮: [{color}]{result}[/{color}] vs {opponent}\n"
-
-    content = f"""
-[bold cyan]队伍信息[/bold cyan]
-━━━━━━━━━━━━━━━━━━━━
-队伍名称: {stats['name']}
-当前战绩: {stats['record']}
-状态: {status}
-
-[bold cyan]比赛历史[/bold cyan]
-━━━━━━━━━━━━━━━━━━━━
-{history_text if history_text else "  暂无比赛记录"}
-
-[bold cyan]已交手队伍[/bold cyan]
-━━━━━━━━━━━━━━━━━━━━
-  {', '.join(stats['opponents_played']) if stats['opponents_played'] else "无"}
-    """
-
-    panel = Panel(content.strip(), title=f"{team_name} 详细信息", border_style="cyan")
-    console.print("\n")
-    console.print(panel)
 
 
 @click.command()
@@ -633,12 +371,9 @@ def main():
         console.print("  1. 📊 查看当前积分榜")
         console.print("  2. 🎯 查看下一轮分组")
         console.print("  3. 🎲 计算两队相遇概率")
-        console.print("  4. 📈 计算某队所有对手概率")
-        console.print("  5. 🔮 模拟晋级/淘汰概率")
-        console.print("  6. 🔍 查看队伍详情")
         console.print("  0. 👋 退出")
 
-        choice = Prompt.ask("\n请选择功能", choices=["0", "1", "2", "3", "4", "5", "6"])
+        choice = Prompt.ask("\n请选择功能", choices=["0", "1", "2", "3"])
 
         if choice == "0":
             console.print("[yellow]感谢使用，再见！👋[/yellow]")
@@ -649,12 +384,6 @@ def main():
             display_next_round_groups()
         elif choice == "3":
             calculate_single_matchup()
-        elif choice == "4":
-            calculate_all_matchups()
-        elif choice == "5":
-            simulate_advancement()
-        elif choice == "6":
-            view_team_details()
 
         if choice != "0":
             if not Confirm.ask("\n继续使用其他功能吗？", default=True):

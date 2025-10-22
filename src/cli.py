@@ -11,6 +11,15 @@ from rich.prompt import Prompt, Confirm
 from rich import print as rprint
 from rich.markup import escape
 import time
+import matplotlib.pyplot as plt
+import matplotlib
+import seaborn as sns
+from pathlib import Path
+from datetime import datetime
+
+# 设置中文字体支持
+matplotlib.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'DejaVu Sans']
+matplotlib.rcParams['axes.unicode_minus'] = False
 
 from .worlds_2025_data import (
     load_current_swiss_stage,
@@ -21,79 +30,150 @@ from .swiss_engine import ProbabilityCalculator
 
 console = Console()
 
+# 创建输出目录
+OUTPUT_DIR = Path("output")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
 
 def display_current_standings():
-    """显示当前积分榜"""
+    """显示当前积分榜（生成图片）"""
     stage = load_current_swiss_stage()
-
-    # 创建表格
-    table = Table(title="2025英雄联盟世界赛瑞士轮积分榜", show_header=True, header_style="bold magenta")
-    table.add_column("队伍", style="cyan", width=8)
-    table.add_column("战绩", justify="center", style="white")
-    table.add_column("状态", justify="center")
-    table.add_column("对战历史", style="dim")
 
     # 按战绩排序
     teams_sorted = sorted(stage.teams, key=lambda t: (t.wins, -t.losses), reverse=True)
 
+    # 创建图表
+    fig, ax = plt.subplots(figsize=(16, 10))
+    ax.axis('tight')
+    ax.axis('off')
+
+    # 准备表格数据
+    table_data = []
     for team in teams_sorted:
-        status = ""
-        status_style = "white"
-
         if team.is_qualified:
-            status = "✅ 已晋级"
-            status_style = "green"
+            status = "[晋级]"
         elif team.is_eliminated:
-            status = "❌ 已淘汰"
-            status_style = "red"
+            status = "[淘汰]"
         else:
-            status = "⚔️ 比赛中"
-            status_style = "yellow"
+            status = "[比赛中]"
 
-        # 格式化对战历史，每场比赛固定宽度为6个字符
+        # 格式化对战历史
         history = []
         for opponent, won in team.match_history:
-            # 计算对手名称需要的填充
-            # 格式: "✓ XXXX" 总共6个字符，符号1个+空格1个+队名4个
-            padded_opponent = opponent.ljust(4)
             if won is None:
-                # 待定比赛，显示为亮灰色
-                history.append(f"[bright_black]- {padded_opponent}[/bright_black]")
+                history.append(f"? {opponent}")
             elif won:
-                history.append(f"[green]✓ {padded_opponent}[/green]")
+                history.append(f"W {opponent}")
             else:
-                history.append(f"[red]✗ {padded_opponent}[/red]")
+                history.append(f"L {opponent}")
 
-        table.add_row(
+        table_data.append([
             team.name,
             f"{team.wins}-{team.losses}",
-            f"[{status_style}]{status}[/{status_style}]",
+            status,
             " | ".join(history)
-        )
+        ])
 
-    console.print(table)
+    # 创建表格
+    table = ax.table(
+        cellText=table_data,
+        colLabels=["队伍", "战绩", "状态", "对战历史"],
+        cellLoc='left',
+        loc='center',
+        colWidths=[0.08, 0.08, 0.12, 0.72]
+    )
+
+    # 设置样式
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 2)
+
+    # 设置标题行样式
+    for i in range(4):
+        cell = table[(0, i)]
+        cell.set_facecolor('#8B5CF6')
+        cell.set_text_props(weight='bold', color='white')
+
+    # 设置数据行样式
+    for i in range(1, len(table_data) + 1):
+        for j in range(4):
+            cell = table[(i, j)]
+            if i % 2 == 0:
+                cell.set_facecolor('#F3F4F6')
+            else:
+                cell.set_facecolor('#FFFFFF')
+
+            # 根据状态设置颜色
+            if j == 2:  # 状态列
+                if "[晋级]" in table_data[i-1][2]:
+                    cell.set_text_props(color='green', weight='bold')
+                elif "[淘汰]" in table_data[i-1][2]:
+                    cell.set_text_props(color='red', weight='bold')
+                else:
+                    cell.set_text_props(color='orange', weight='bold')
+
+    # 添加标题
+    plt.title('2025英雄联盟世界赛瑞士轮积分榜', fontsize=16, fontweight='bold', pad=20)
+
+    # 保存图片
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = OUTPUT_DIR / f"standings_{timestamp}.png"
+    plt.savefig(filename, dpi=300, bbox_inches='tight', facecolor='white')
+    plt.close()
+
+    console.print(f"[green]✅ 积分榜已保存至: {filename}[/green]")
 
 
 def display_next_round_groups():
-    """显示下一轮分组"""
+    """显示下一轮分组（生成图片）"""
     matchups = get_next_round_matchups()
 
-    console.print("\n[bold cyan]下一轮可能的对阵组:[/bold cyan]\n")
+    # 创建图表
+    fig, ax = plt.subplots(figsize=(14, 8))
+    ax.axis('off')
+
+    y_position = 0.95
+    box_height = 0.15
+    margin = 0.02
 
     for record, confirmed_teams, pending_matchups in matchups:
         # 构建显示内容
         display_items = []
-
-        # 添加已确定的队伍
         display_items.extend(confirmed_teams)
 
-        # 添加待定对阵（显示为 "(队伍A vs 队伍B) 胜者"）
         for team1, team2 in pending_matchups:
             display_items.append(f"({team1} vs {team2}) 胜者")
 
-        panel_content = ", ".join(display_items)
-        panel = Panel(panel_content, title=record, title_align="left", border_style="cyan")
-        console.print(panel)
+        content = ", ".join(display_items)
+
+        # 绘制分组框
+        ax.add_patch(plt.Rectangle((0.05, y_position - box_height), 0.9, box_height,
+                                   facecolor='#E0F2FE', edgecolor='#0EA5E9', linewidth=2))
+
+        # 添加战绩标题
+        ax.text(0.08, y_position - 0.03, record, fontsize=14, fontweight='bold',
+               verticalalignment='top', color='#0369A1')
+
+        # 添加队伍内容
+        ax.text(0.08, y_position - 0.08, content, fontsize=11,
+               verticalalignment='top', wrap=True)
+
+        y_position -= (box_height + margin)
+
+    # 添加标题
+    ax.text(0.5, 0.98, '下一轮可能的对阵组', fontsize=18, fontweight='bold',
+           horizontalalignment='center', verticalalignment='top')
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+
+    # 保存图片
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = OUTPUT_DIR / f"next_round_groups_{timestamp}.png"
+    plt.savefig(filename, dpi=300, bbox_inches='tight', facecolor='white')
+    plt.close()
+
+    console.print(f"[green]✅ 下轮分组已保存至: {filename}[/green]")
 
 
 def get_team_input(prompt_text: str, active_teams: list) -> str:
@@ -128,6 +208,221 @@ def get_team_input(prompt_text: str, active_teams: list) -> str:
             else:
                 console.print(f"[red]队伍 '{user_input}' 不在活跃队伍列表中，请重新输入[/red]")
                 continue
+
+
+def calculate_2_2_matchup_matrix():
+    """计算2-2组所有队伍的配对概率矩阵"""
+    stage = load_current_swiss_stage()
+    calculator = ProbabilityCalculator(stage)
+
+    console.print("\n[bold cyan]╔═══════════════════════════════════════════════════════════╗[/bold cyan]")
+    console.print("[bold cyan]║     🎯 2-2 组配对概率矩阵计算器 (生死战预测)     ║[/bold cyan]")
+    console.print("[bold cyan]╚═══════════════════════════════════════════════════════════╝[/bold cyan]\n")
+
+    try:
+        # 第一步：初步分析
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[cyan]分析2-2组构成...", total=None)
+            result = calculator.calculate_2_2_matchup_matrix()
+            progress.update(task, completed=100)
+
+        # 显示当前2-2组队伍
+        if result['current_2_2_teams']:
+            console.print(f"[bold green]✅ 当前已在2-2组的队伍:[/bold green] {', '.join(result['current_2_2_teams'])}\n")
+        else:
+            console.print("[dim]当前没有队伍在2-2组[/dim]\n")
+
+        # 显示所有可能进入2-2的队伍
+        console.print(f"[bold yellow]📋 所有可能进入2-2组的队伍:[/bold yellow]")
+        console.print(f"   {', '.join(result['all_possible_teams'])}\n")
+
+        # 检查是否需要用户输入
+        if result['need_input']:
+            console.print(f"[bold magenta]⚠️  发现 {len(result['impact_matches'])} 场待定比赛会影响2-2组的构成[/bold magenta]\n")
+
+            # 显示影响比赛
+            console.print("[bold cyan]影响2-2组的待定比赛：[/bold cyan]\n")
+            for i, match in enumerate(result['impact_matches'], 1):
+                console.print(f"  {i}. [cyan]{match['team1']} vs {match['team2']}[/cyan]")
+                console.print(f"     当前战绩: {match['team1_record']} vs {match['team2_record']}")
+
+            console.print("\n" + "━"*60)
+            console.print("[bold yellow]请输入各场比赛的胜率估算（用于加权计算）：[/bold yellow]\n")
+
+            # 收集胜率输入
+            win_probabilities = {}
+            for match in result['impact_matches']:
+                t1, t2 = match['team1'], match['team2']
+                prompt_text = f"{t1} 战胜 {t2} 的概率 [0-100%，默认50]"
+                prob_input = Prompt.ask(prompt_text, default="50")
+                try:
+                    prob = float(prob_input) / 100.0
+                    prob = max(0.0, min(1.0, prob))
+                    match_key = tuple(sorted([t1, t2]))
+                    win_probabilities[match_key] = prob
+                except ValueError:
+                    console.print(f"[yellow]输入无效，使用默认值 50%[/yellow]")
+                    match_key = tuple(sorted([t1, t2]))
+                    win_probabilities[match_key] = 0.5
+
+            console.print("\n" + "━"*60)
+            console.print("[cyan]正在计算所有可能情况的配对概率...[/cyan]\n")
+
+            # 重新计算，带上用户输入
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                task = progress.add_task(f"[cyan]枚举 {2**len(result['impact_matches'])} 种情况...", total=None)
+                final_result = calculator.calculate_2_2_matchup_matrix(win_probabilities)
+                progress.update(task, completed=100)
+
+            console.print("[bold green]✨ 计算完成！[/bold green]\n")
+
+            # 显示队伍进入2-2组的概率
+            console.print("━"*60)
+            console.print("[bold cyan]📊 各队伍进入2-2组的概率：[/bold cyan]\n")
+
+            team_prob_table = Table(show_header=True, header_style="bold magenta", box=None)
+            team_prob_table.add_column("队伍", style="cyan", width=8)
+            team_prob_table.add_column("进入概率", justify="right", style="green", width=12)
+            team_prob_table.add_column("状态说明", style="dim", width=30)
+
+            for team in final_result['all_possible_teams']:
+                prob = final_result['team_probabilities'].get(team, 0.0)
+
+                # 判断状态
+                if team in final_result['current_2_2_teams']:
+                    status = "已在2-2组"
+                    prob_display = "100.0%"
+                else:
+                    prob_display = f"{prob:.1%}"
+                    team_obj = stage.get_team_by_name(team)
+                    if team_obj:
+                        if team_obj.wins == 1 and team_obj.losses == 2:
+                            status = "需要赢下当前比赛"
+                        elif team_obj.wins == 2 and team_obj.losses == 1:
+                            status = "需要输掉当前比赛"
+                        else:
+                            status = ""
+
+                team_prob_table.add_row(team, prob_display, status)
+
+            console.print(team_prob_table)
+
+            # 显示加权平均的配对概率矩阵（热力图风格）
+            console.print("\n" + "━"*60)
+            console.print("[bold cyan]🔥 2-2组配对概率矩阵（加权平均）[/bold cyan]\n")
+
+            _display_probability_heatmap(final_result['all_possible_teams'], final_result['matrix'], stage)
+
+            # 询问是否查看详细场景
+            console.print("\n" + "━"*60)
+            if Confirm.ask("\n[yellow]是否查看各个具体情况的详细配对方案？[/yellow]", default=False):
+                console.print("\n[bold cyan]📋 详细情况分析：[/bold cyan]\n")
+
+                for i, scenario in enumerate(final_result['scenarios'], 1):
+                    if scenario['probability'] > 0.001:  # 只显示概率>0.1%的情况
+                        console.print(f"[bold yellow]═══ 情况 {i} ═══[/bold yellow]")
+                        console.print(f"[green]发生概率: {scenario['probability']:.2%}[/green]")
+                        console.print(f"[dim]2-2组队伍: {', '.join(scenario['teams_in_2_2'])}[/dim]\n")
+
+                        # 显示该情况的配对矩阵
+                        _display_probability_heatmap(scenario['teams_in_2_2'], scenario['matrix'], stage, compact=True)
+                        console.print()
+
+        else:
+            # 没有待定比赛，直接显示结果
+            if result['matrix']:
+                console.print("[bold cyan]🔥 2-2组配对概率矩阵[/bold cyan]\n")
+                _display_probability_heatmap(result['all_possible_teams'], result['matrix'], stage)
+            else:
+                console.print("[yellow]当前2-2组没有足够队伍进行配对分析[/yellow]")
+
+    except Exception as e:
+        console.print(f"[red]错误: {escape(str(e))}[/red]")
+        import traceback
+        console.print("[dim]详细错误信息:[/dim]")
+        console.print(traceback.format_exc(), style="dim", markup=False)
+
+
+def _display_probability_heatmap(teams: list, matrix: dict, stage, compact: bool = False):
+    """
+    显示概率热力图矩阵
+
+    Args:
+        teams: 队伍列表
+        matrix: 概率矩阵字典 {(team1, team2): probability}
+        stage: SwissStage 对象
+        compact: 是否紧凑显示
+    """
+    if not teams:
+        console.print("[dim]没有队伍数据[/dim]")
+        return
+
+    # 创建矩阵表格
+    table = Table(show_header=True, header_style="bold magenta", box=None, padding=(0, 1))
+
+    # 添加表头
+    table.add_column("", style="cyan bold", width=6, justify="right")
+    for team in teams:
+        table.add_column(team, justify="center", width=7)
+
+    # 添加数据行
+    for t1 in teams:
+        row_data = [t1]
+
+        for t2 in teams:
+            if t1 == t2:
+                # 对角线
+                row_data.append("[dim]-[/dim]")
+            else:
+                prob = matrix.get((t1, t2), 0.0)
+
+                # 检查是否已交手
+                team1_obj = stage.get_team_by_name(t1)
+                team2_obj = stage.get_team_by_name(t2)
+                already_played = False
+                if team1_obj and team2_obj and t2 in team1_obj.opponents_played:
+                    already_played = True
+
+                # 根据概率选择颜色和样式
+                if already_played:
+                    # 已交手，显示为深灰色
+                    cell = f"[dim black]0.0%[/dim black]"
+                elif prob == 0.0:
+                    cell = "[dim]0.0%[/dim]"
+                elif prob >= 0.30:
+                    # 高概率：红色/品红色
+                    cell = f"[bold red]{prob:.1%}[/bold red]"
+                elif prob >= 0.20:
+                    # 中高概率：黄色
+                    cell = f"[bold yellow]{prob:.1%}[/bold yellow]"
+                elif prob >= 0.10:
+                    # 中等概率：绿色
+                    cell = f"[green]{prob:.1%}[/green]"
+                elif prob >= 0.05:
+                    # 低概率：青色
+                    cell = f"[cyan]{prob:.1%}[/cyan]"
+                else:
+                    # 极低概率：灰色
+                    cell = f"[dim]{prob:.1%}[/dim]"
+
+                row_data.append(cell)
+
+        table.add_row(*row_data)
+
+    console.print(table)
+
+    if not compact:
+        # 显示图例
+        console.print("\n[bold]概率等级图例：[/bold]")
+        console.print("  [bold red]≥30%[/bold red]  [bold yellow]20-30%[/bold yellow]  [green]10-20%[/green]  [cyan]5-10%[/cyan]  [dim]<5%[/dim]  [dim black]已交手(0%)[/dim black]")
 
 
 def calculate_single_matchup():
@@ -371,9 +666,10 @@ def main():
         console.print("  1. 📊 查看当前积分榜")
         console.print("  2. 🎯 查看下一轮分组")
         console.print("  3. 🎲 计算两队相遇概率")
+        console.print("  4. 🔥 2-2组配对概率矩阵（生死战预测）")
         console.print("  0. 👋 退出")
 
-        choice = Prompt.ask("\n请选择功能", choices=["0", "1", "2", "3"])
+        choice = Prompt.ask("\n请选择功能", choices=["0", "1", "2", "3", "4"])
 
         if choice == "0":
             console.print("[yellow]感谢使用，再见！👋[/yellow]")
@@ -384,6 +680,8 @@ def main():
             display_next_round_groups()
         elif choice == "3":
             calculate_single_matchup()
+        elif choice == "4":
+            calculate_2_2_matchup_matrix()
 
         if choice != "0":
             if not Confirm.ask("\n继续使用其他功能吗？", default=True):

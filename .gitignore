@@ -54,3 +54,6 @@ htmlcov/
 
 # UV lock file (comment out if you want to track it)
 # uv.lock
+
+# Output directory for generated images
+output/

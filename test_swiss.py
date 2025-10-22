@@ -21,8 +21,10 @@ def test_basic_functionality():
 
     # 测试下一轮分组
     print("[bold]下一轮分组:[/bold]")
-    for record, teams in get_next_round_matchups():
+    for record, teams, pending in get_next_round_matchups():
         print(f"  {record}: {teams}")
+        if pending:
+            print(f"    待定对阵: {pending}")
 
     print("\n[bold]测试概率计算:[/bold]")
 
@@ -32,8 +34,8 @@ def test_basic_functionality():
         team1 = teams_2_1[0]
         team2 = teams_2_1[1]
 
-        prob = calculator.calculate_matchup_probability(team1.name, team2.name)
-        print(f"  {team1.name} vs {team2.name}: {prob:.1%}")
+        result = calculator.calculate_matchup_probability(team1.name, team2.name)
+        print(f"  {team1.name} vs {team2.name}: {result['probability']:.1%}")
 
     # 测试某队所有对手概率
     if teams_2_1:
@@ -51,15 +53,15 @@ def test_basic_functionality():
     team = stage.get_team_by_name("T1")
     if team and team.opponents_played:
         opponent = list(team.opponents_played)[0]
-        prob = calculator.calculate_matchup_probability("T1", opponent)
-        print(f"  T1 vs {opponent} (已交手): {prob:.1%}")
+        result = calculator.calculate_matchup_probability("T1", opponent)
+        print(f"  T1 vs {opponent} (已交手): {result['probability']:.1%}")
 
     # 不同战绩的队伍
     teams_2_1 = stage.get_teams_by_record(2, 1)
     teams_1_2 = stage.get_teams_by_record(1, 2)
     if teams_2_1 and teams_1_2:
-        prob = calculator.calculate_matchup_probability(teams_2_1[0].name, teams_1_2[0].name)
-        print(f"  {teams_2_1[0].name} (2-1) vs {teams_1_2[0].name} (1-2): {prob:.1%}")
+        result = calculator.calculate_matchup_probability(teams_2_1[0].name, teams_1_2[0].name)
+        print(f"  {teams_2_1[0].name} (2-1) vs {teams_1_2[0].name} (1-2): {result['probability']:.1%}")
 
 
 def test_simulation():

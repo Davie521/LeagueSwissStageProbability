@@ -902,30 +902,40 @@ class ProbabilityCalculator:
 
     def calculate_all_matchup_probabilities(
         self, team_name: str
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Dict]:
         """
         计算一支队伍与所有可能对手的匹配概率
+
+        相当于对每个活跃队伍都运行一遍 calculate_matchup_probability
 
         Args:
             team_name: 队伍名称
 
         Returns:
-            对手名称到概率的映射
+            对手名称到详细结果的映射，每个结果包含：
+            {
+                'probability': float,  # 相遇概率
+                'same_group': bool,  # 是否在同一组
+                'need_interactive': bool,  # 是否需要交互式输入
+                'explanation': str,  # 简要说明
+                ...
+            }
         """
         team = self.stage.get_team_by_name(team_name)
         if not team or not team.is_active:
             return {}
 
         probabilities = {}
-        teams_in_group = self.stage.get_teams_by_record(team.wins, team.losses)
 
-        for other_team in teams_in_group:
-            if other_team.name != team_name and team.can_play_against(other_team):
+        # 遍历所有活跃队伍（不仅仅是同组队伍）
+        for other_team in self.stage.get_active_teams():
+            if other_team.name != team_name:
+                # 对每个对手都运行一遍 calculate_matchup_probability
                 result = self.calculate_matchup_probability(team_name, other_team.name)
-                # 现在返回的是字典，需要提取probability字段
-                prob = result['probability']
-                if prob > 0:
-                    probabilities[other_team.name] = prob
+
+                # 只有在有相遇可能时才添加（概率>0 或需要交互式输入）
+                if result['probability'] > 0 or result.get('need_interactive', False):
+                    probabilities[other_team.name] = result
 
         return probabilities
 

@@ -9,6 +9,7 @@ from rich.columns import Columns
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.prompt import Prompt, Confirm
 from rich import print as rprint
+from rich.markup import escape
 import time
 
 from .worlds_2025_data import (
@@ -96,6 +97,40 @@ def display_next_round_groups():
         console.print(panel)
 
 
+def get_team_input(prompt_text: str, active_teams: list) -> str:
+    """
+    获取队伍输入，支持：
+    1. 直接输入队伍名称（如 "BLG"）
+    2. 输入序号（如 "1"）
+
+    Args:
+        prompt_text: 提示文本
+        active_teams: 活跃队伍列表
+
+    Returns:
+        队伍名称（大写）
+    """
+    while True:
+        user_input = Prompt.ask(prompt_text).strip()
+
+        # 尝试作为序号解析
+        try:
+            index = int(user_input)
+            if 1 <= index <= len(active_teams):
+                return active_teams[index - 1]
+            else:
+                console.print(f"[red]序号无效，请输入 1-{len(active_teams)} 之间的数字[/red]")
+                continue
+        except ValueError:
+            # 不是数字，作为队伍名称处理
+            team_name = user_input.upper()
+            if team_name in active_teams:
+                return team_name
+            else:
+                console.print(f"[red]队伍 '{user_input}' 不在活跃队伍列表中，请重新输入[/red]")
+                continue
+
+
 def calculate_single_matchup():
     """计算两队相遇概率（支持交互式输入）"""
     stage = load_current_swiss_stage()
@@ -113,8 +148,8 @@ def calculate_single_matchup():
         team_obj = stage.get_team_by_name(team)
         console.print(f"  {i}. {team} ({team_obj.record})")
 
-    team1 = Prompt.ask("\n请输入第一支队伍名称").upper()
-    team2 = Prompt.ask("请输入第二支队伍名称").upper()
+    team1 = get_team_input("\n请输入第一支队伍名称或序号", active_teams)
+    team2 = get_team_input("请输入第二支队伍名称或序号", active_teams)
 
     try:
         with Progress(
@@ -266,11 +301,11 @@ def calculate_single_matchup():
 
                     console.print("━"*60)
                     console.print(f"[bold yellow]📌 说明：[/bold yellow]")
-                    console.print("[dim]• 发生概率：该情况出现的概率（基于您输入的胜率）")
-                    console.print("• 配对方案：包含目标对阵的方案数 / 有效配对总数")
-                    console.print("• 相遇概率：在该情况下两队相遇的概率")
-                    console.print("• 加权平均：所有情况的相遇概率按发生概率加权平均")
-                    console.print("• 绿色高亮的配对方案包含目标对阵，灰色的不包含[/dim]")
+                    console.print("• 发生概率：该情况出现的概率（基于您输入的胜率）", style="dim")
+                    console.print("• 配对方案：包含目标对阵的方案数 / 有效配对总数", style="dim")
+                    console.print("• 相遇概率：在该情况下两队相遇的概率", style="dim")
+                    console.print("• 加权平均：所有情况的相遇概率按发生概率加权平均", style="dim")
+                    console.print("• 绿色高亮的配对方案包含目标对阵，灰色的不包含", style="dim")
 
             else:
                 # 没有其他影响因素，直接计算
@@ -311,7 +346,7 @@ def calculate_single_matchup():
         console.print("="*60)
 
     except Exception as e:
-        console.print(f"[red]错误: {str(e)}[/red]")
+        console.print(f"[red]错误: {escape(str(e))}[/red]")
         import traceback
         # 不使用markup格式化traceback，避免括号冲突
         console.print("[dim]详细错误信息:[/dim]")
@@ -331,11 +366,11 @@ def calculate_all_matchups():
         return
 
     console.print("\n[bold]当前仍在比赛的队伍:[/bold]")
-    for team in active_teams:
+    for i, team in enumerate(active_teams, 1):
         team_obj = stage.get_team_by_name(team)
-        console.print(f"  • {team} ({team_obj.record})")
+        console.print(f"  {i}. {team} ({team_obj.record})")
 
-    team_name = Prompt.ask("\n请输入队伍名称").upper()
+    team_name = get_team_input("\n请输入队伍名称或序号", active_teams)
 
     try:
         with Progress(
@@ -345,28 +380,116 @@ def calculate_all_matchups():
         ) as progress:
             task = progress.add_task("[cyan]计算所有可能对手的概率...", total=None)
 
+            # 第一步：先计算所有对手（不提供胜率）
             probabilities = calculator.calculate_all_matchup_probabilities(team_name)
 
             progress.update(task, completed=100)
 
+        # 检查是否有需要交互式输入的情况
+        need_interactive = any(result.get('need_interactive') for result in probabilities.values())
+
+        if need_interactive:
+            console.print(f"\n[bold yellow]⚠️  检测到部分对手需要交互式计算[/bold yellow]\n")
+
+            # 收集所有影响因素的比赛（去重）
+            all_impact_matches = {}
+            for opponent, result in probabilities.items():
+                if result.get('need_interactive'):
+                    interactive_data = result['interactive_data']
+                    for match in interactive_data.get('impact_matches', []):
+                        match_key = tuple(sorted([match['team1'], match['team2']]))
+                        if match_key not in all_impact_matches:
+                            all_impact_matches[match_key] = match
+
+            if all_impact_matches:
+                console.print("[bold magenta]以下待定比赛会影响计算结果：[/bold magenta]\n")
+                for i, (match_key, match) in enumerate(all_impact_matches.items(), 1):
+                    console.print(f"  {i}. [cyan]{match['team1']} vs {match['team2']}[/cyan]")
+                    console.print(f"     当前战绩: {match['team1_record']} vs {match['team2_record']}")
+
+                console.print("\n" + "━"*60)
+                console.print("[bold yellow]请输入各场比赛的胜率估算（这些胜率将用于所有相关计算）：[/bold yellow]\n")
+
+                # 收集胜率输入
+                win_probabilities = {}
+                for match_key, match in all_impact_matches.items():
+                    t1, t2 = match['team1'], match['team2']
+                    prompt_text = f"{t1} 战胜 {t2} 的概率 [0-100%，默认50]"
+                    prob_input = Prompt.ask(prompt_text, default="50")
+                    try:
+                        prob = float(prob_input) / 100.0
+                        prob = max(0.0, min(1.0, prob))  # 限制在 0-1
+                        win_probabilities[match_key] = prob
+                    except ValueError:
+                        console.print(f"[yellow]输入无效，使用默认值 50%[/yellow]")
+                        win_probabilities[match_key] = 0.5
+
+                console.print("\n" + "━"*60)
+                console.print("[cyan]正在重新计算所有对手概率...[/cyan]\n")
+
+                # 重新计算所有需要交互式输入的对手
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    console=console,
+                ) as progress:
+                    task = progress.add_task("[cyan]计算中...", total=None)
+
+                    for opponent, result in probabilities.items():
+                        if result.get('need_interactive'):
+                            # 使用共享的胜率输入重新计算
+                            interactive_data = result['interactive_data']
+                            final_result = calculator.calculate_cross_group_probability_interactive(
+                                team_name, opponent, win_probabilities,
+                                skip_current_record=result.get('reason', '').startswith('两队虽然战绩相同')
+                            )
+                            # 更新概率
+                            probabilities[opponent]['probability'] = final_result['weighted_probability']
+                            probabilities[opponent]['need_interactive'] = False
+
+                    progress.update(task, completed=100)
+
         if probabilities:
-            # 按概率排序
-            sorted_probs = sorted(probabilities.items(), key=lambda x: x[1], reverse=True)
+            # 按概率排序（从结果字典中提取 probability 字段）
+            sorted_probs = sorted(
+                probabilities.items(),
+                key=lambda x: x[1]['probability'],
+                reverse=True
+            )
 
             table = Table(title=f"{team_name} 下一轮可能的对手", show_header=True)
             table.add_column("对手", style="cyan", width=10)
-            table.add_column("概率", justify="right", style="yellow")
-            table.add_column("概率条", width=30)
+            table.add_column("战绩", style="dim", width=8)
+            table.add_column("概率", justify="right", style="yellow", width=10)
+            table.add_column("概率条", width=25)
+            table.add_column("说明", style="dim", width=20)
 
-            for opponent, prob in sorted_probs:
+            for opponent, result in sorted_probs:
+                prob = result['probability']
+
+                # 获取对手战绩
+                opponent_team = stage.get_team_by_name(opponent)
+                opponent_record = opponent_team.record if opponent_team else "?"
+
                 # 创建概率条
-                bar_length = int(prob * 30)
-                bar = "█" * bar_length + "░" * (30 - bar_length)
+                bar_length = int(prob * 25)
+                bar = "█" * bar_length + "░" * (25 - bar_length)
+
+                # 生成说明
+                explanation = ""
+                if result['same_group']:
+                    explanation = "同组"
+                elif result.get('need_interactive'):
+                    explanation = "需要交互式计算"
+                else:
+                    explanation = "跨组"
 
                 table.add_row(
                     opponent,
+                    opponent_record,
                     f"{prob:.1%}",
-                    f"[cyan]{bar}[/cyan]"
+                    f"[cyan]{bar}[/cyan]",
+                    explanation
                 )
 
             console.print("\n")
@@ -375,7 +498,7 @@ def calculate_all_matchups():
             console.print(f"[yellow]⚠️ {team_name} 没有可能的对手（可能已经晋级或淘汰）[/yellow]")
 
     except Exception as e:
-        console.print(f"[red]错误: {e}[/red]")
+        console.print(f"[red]错误: {escape(str(e))}[/red]")
 
 
 def simulate_advancement():
@@ -428,7 +551,7 @@ def simulate_advancement():
         console.print(panel)
 
     except Exception as e:
-        console.print(f"[red]错误: {e}[/red]")
+        console.print(f"[red]错误: {escape(str(e))}[/red]")
 
 
 def view_team_details():

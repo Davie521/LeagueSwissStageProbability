@@ -51,10 +51,6 @@ class SwissDrawEngine:
 
     def generate_valid_pairings(self, teams: List[Team]) -> List[List[Tuple[Team, Team]]]:
         """生成所有有效的配对方案"""
-        # 处理奇数队伍的情况（瑞士轮可能出现奇数队伍）
-        if len(teams) % 2 != 0:
-            # 对于奇数队伍，返回空列表（需要跨组配对）
-            return []
 
         if len(teams) == 0:
             return [[]]
@@ -130,9 +126,456 @@ class ProbabilityCalculator:
         self.stage = stage
         self.engine = SwissDrawEngine(stage)
 
+    def _identify_pending_matches(self) -> List[Dict]:
+        """
+        识别所有待定比赛（won = None 的比赛）
+
+        Returns:
+            待定比赛列表，每个包含：
+            {
+                'team1': str,  # 队伍1名称
+                'team2': str,  # 队伍2名称
+                'team1_record': str,  # 队伍1当前战绩
+                'team2_record': str,  # 队伍2当前战绩
+            }
+        """
+        pending_matches = []
+        processed_pairs = set()
+
+        for team in self.stage.teams:
+            if team.match_history:
+                # 找到最后一场比赛，检查是否待定
+                for opponent_name, result in team.match_history:
+                    if result is None:  # 待定比赛
+                        # 避免重复添加同一场比赛
+                        pair = tuple(sorted([team.name, opponent_name]))
+                        if pair not in processed_pairs:
+                            opponent = self.stage.get_team_by_name(opponent_name)
+                            if opponent:
+                                pending_matches.append({
+                                    'team1': team.name,
+                                    'team2': opponent_name,
+                                    'team1_record': team.record,
+                                    'team2_record': opponent.record,
+                                })
+                                processed_pairs.add(pair)
+
+        return pending_matches
+
+    def _find_path_to_target_group(self, team: Team, target_w: int, target_l: int) -> Optional[Dict]:
+        """
+        判断队伍能否到达目标分组及需要什么结果
+
+        Returns:
+            如果能到达，返回：
+            {
+                'possible': True,
+                'wins_needed': int,  # 需要赢几场
+                'losses_needed': int,  # 需要输几场
+                'pending_match': Dict or None,  # 待定比赛信息
+            }
+            如果不能到达，返回 None
+        """
+        current_w, current_l = team.wins, team.losses
+
+        # 检查是否已经在目标分组
+        if current_w == target_w and current_l == target_l:
+            return {
+                'possible': True,
+                'wins_needed': 0,
+                'losses_needed': 0,
+                'pending_match': None,
+            }
+
+        # 检查是否已经晋级或淘汰
+        if current_w >= 3 or current_l >= 3:
+            return None
+
+        # 检查目标分组是否有效
+        if target_w >= 3 or target_l >= 3:
+            return None
+
+        # 计算需要的胜负场数
+        wins_needed = target_w - current_w
+        losses_needed = target_l - current_l
+
+        # 检查是否可达
+        if wins_needed < 0 or losses_needed < 0:
+            return None
+
+        # 检查路径上是否会提前晋级/淘汰
+        # 简化处理：只考虑一步到达的情况
+        if wins_needed + losses_needed > 1:
+            # 需要多场比赛，暂时返回不可达（简化处理）
+            return None
+
+        # 找到待定比赛
+        pending_match = None
+        for opponent_name, result in team.match_history:
+            if result is None:
+                opponent = self.stage.get_team_by_name(opponent_name)
+                if opponent:
+                    pending_match = {
+                        'opponent': opponent_name,
+                        'opponent_record': opponent.record,
+                    }
+                break
+
+        return {
+            'possible': True,
+            'wins_needed': wins_needed,
+            'losses_needed': losses_needed,
+            'pending_match': pending_match,
+        }
+
+    def _identify_impact_matches(self, target_w: int, target_l: int, exclude_matches: List[tuple]) -> List[Dict]:
+        """
+        识别哪些待定比赛会影响目标分组的构成
+
+        Args:
+            target_w: 目标分组的胜场数
+            target_l: 目标分组的负场数
+            exclude_matches: 要排除的比赛（通常是必要条件的比赛）
+
+        Returns:
+            影响分组的待定比赛列表
+        """
+        impact_matches = []
+        all_pending = self._identify_pending_matches()
+
+        for match in all_pending:
+            # 检查是否在排除列表中
+            match_pair = tuple(sorted([match['team1'], match['team2']]))
+            if match_pair in exclude_matches:
+                continue
+
+            team1 = self.stage.get_team_by_name(match['team1'])
+            team2 = self.stage.get_team_by_name(match['team2'])
+
+            if not team1 or not team2:
+                continue
+
+            # 检查比赛结果是否会让某队进入目标分组
+            # 如果 team1 赢
+            if team1.wins + 1 == target_w and team1.losses == target_l:
+                impact_matches.append({
+                    'match': match,
+                    'impact_type': f'{team1.name} 赢则进入 {target_w}-{target_l}',
+                    'team_affected': team1.name,
+                    'result_needed': 'team1_win',
+                })
+
+            # 如果 team1 输
+            if team1.wins == target_w and team1.losses + 1 == target_l:
+                impact_matches.append({
+                    'match': match,
+                    'impact_type': f'{team1.name} 输则进入 {target_w}-{target_l}',
+                    'team_affected': team1.name,
+                    'result_needed': 'team1_lose',
+                })
+
+            # 如果 team2 赢
+            if team2.wins + 1 == target_w and team2.losses == target_l:
+                if not any(im['match'] == match and im['team_affected'] == team2.name
+                          for im in impact_matches):
+                    impact_matches.append({
+                        'match': match,
+                        'impact_type': f'{team2.name} 赢则进入 {target_w}-{target_l}',
+                        'team_affected': team2.name,
+                        'result_needed': 'team2_win',
+                    })
+
+            # 如果 team2 输
+            if team2.wins == target_w and team2.losses + 1 == target_l:
+                if not any(im['match'] == match and im['team_affected'] == team2.name
+                          for im in impact_matches):
+                    impact_matches.append({
+                        'match': match,
+                        'impact_type': f'{team2.name} 输则进入 {target_w}-{target_l}',
+                        'team_affected': team2.name,
+                        'result_needed': 'team2_lose',
+                    })
+
+        # 去重：同一场比赛可能因为两个队伍都会影响而重复
+        unique_matches = {}
+        for im in impact_matches:
+            match_key = (im['match']['team1'], im['match']['team2'])
+            if match_key not in unique_matches:
+                unique_matches[match_key] = im['match']
+
+        return list(unique_matches.values())
+
+    def _simulate_group_with_results(self, target_w: int, target_l: int, match_results: Dict[tuple, str]) -> List[Team]:
+        """
+        根据指定的比赛结果模拟目标分组的构成
+
+        Args:
+            target_w: 目标分组的胜场数
+            target_l: 目标分组的负场数
+            match_results: 比赛结果字典 {(team1, team2): 'team1_win' or 'team2_win'}
+
+        Returns:
+            目标分组中的队伍列表
+        """
+        # 创建深拷贝以模拟比赛结果
+        simulated_stage = copy.deepcopy(self.stage)
+
+        # 应用比赛结果
+        for (t1_name, t2_name), result in match_results.items():
+            t1 = simulated_stage.get_team_by_name(t1_name)
+            t2 = simulated_stage.get_team_by_name(t2_name)
+
+            if t1 and t2:
+                if result == 'team1_win':
+                    t1.wins += 1
+                    t2.losses += 1
+                elif result == 'team2_win':
+                    t1.losses += 1
+                    t2.wins += 1
+
+        # 获取目标分组的队伍
+        return simulated_stage.get_teams_by_record(target_w, target_l)
+
+    def _calculate_pairing_probability(self, team1_name: str, team2_name: str, teams_in_group: List[Team]) -> Dict:
+        """
+        计算两队在指定分组中相遇的概率（考虑已交手限制）
+
+        Args:
+            team1_name: 队伍1名称
+            team2_name: 队伍2名称
+            teams_in_group: 分组中的所有队伍
+
+        Returns:
+            {
+                'probability': float,  # 相遇概率
+                'total_pairings': int,  # 总配对方案数
+                'favorable_pairings': int,  # 包含目标对阵的方案数
+                'teams': List[str],  # 分组中的队伍名称
+            }
+        """
+        if len(teams_in_group) < 2:
+            return {
+                'probability': 0.0,
+                'total_pairings': 0,
+                'favorable_pairings': 0,
+                'teams': [],
+            }
+
+        # 生成所有有效配对
+        all_pairings = self.engine.generate_valid_pairings(teams_in_group)
+
+        if not all_pairings:
+            return {
+                'probability': 0.0,
+                'total_pairings': 0,
+                'favorable_pairings': 0,
+                'teams': [t.name for t in teams_in_group],
+            }
+
+        # 计算包含目标配对的方案数
+        target_pairing_count = 0
+        for pairing in all_pairings:
+            for pair in pairing:
+                if (pair[0].name == team1_name and pair[1].name == team2_name) or \
+                   (pair[0].name == team2_name and pair[1].name == team1_name):
+                    target_pairing_count += 1
+                    break
+
+        return {
+            'probability': target_pairing_count / len(all_pairings) if all_pairings else 0.0,
+            'total_pairings': len(all_pairings),
+            'favorable_pairings': target_pairing_count,
+            'teams': [t.name for t in teams_in_group],
+        }
+
+    def calculate_cross_group_probability_interactive(
+        self, team1_name: str, team2_name: str, win_probabilities: Optional[Dict[tuple, float]] = None,
+        skip_current_record: bool = False
+    ) -> Dict:
+        """
+        交互式计算跨组相遇概率（基于用户输入的比赛胜率）
+
+        Args:
+            team1_name: 队伍1名称
+            team2_name: 队伍2名称
+            win_probabilities: 待定比赛的胜率字典 {(team1, team2): prob_team1_wins}
+                             如果为None，表示需要询问用户
+            skip_current_record: 是否跳过当前战绩组（用于处理同组但已确定不同对手的情况）
+
+        Returns:
+            详细的分析结果字典
+        """
+        team1 = self.stage.get_team_by_name(team1_name)
+        team2 = self.stage.get_team_by_name(team2_name)
+
+        result = {
+            'need_input': False,
+            'prerequisites': [],
+            'impact_matches': [],
+            'scenarios': [],
+            'weighted_probability': 0.0,
+            'explanation': '',
+        }
+
+        if not team1 or not team2:
+            return result
+
+        # 查找可能的共同目标分组
+        possible_records = [(1, 1), (2, 1), (1, 2), (2, 2)]
+        target_record = None
+
+        for target_w, target_l in possible_records:
+            # 如果 skip_current_record=True，跳过当前战绩组
+            if skip_current_record and team1.wins == target_w and team1.losses == target_l:
+                continue
+
+            path1 = self._find_path_to_target_group(team1, target_w, target_l)
+            path2 = self._find_path_to_target_group(team2, target_w, target_l)
+
+            if path1 and path1['possible'] and path2 and path2['possible']:
+                # 进一步检查：如果两队都在目标分组且都不需要移动，跳过
+                if path1['wins_needed'] == 0 and path1['losses_needed'] == 0 and \
+                   path2['wins_needed'] == 0 and path2['losses_needed'] == 0:
+                    continue  # 已经在同一组但无法相遇（上层已处理）
+
+                target_record = (target_w, target_l)
+                result['prerequisites'] = [
+                    {
+                        'team': team1_name,
+                        'current_record': team1.record,
+                        'needs': self._describe_path(team1.wins, team1.losses, target_w, target_l, team1_name),
+                        'pending_match': path1['pending_match'],
+                    },
+                    {
+                        'team': team2_name,
+                        'current_record': team2.record,
+                        'needs': self._describe_path(team2.wins, team2.losses, target_w, target_l, team2_name),
+                        'pending_match': path2['pending_match'],
+                    },
+                ]
+                break
+
+        if not target_record:
+            result['explanation'] = f"{team1_name} 和 {team2_name} 无法到达共同的分组"
+            return result
+
+        target_w, target_l = target_record
+
+        # 识别必要条件的比赛（排除在询问列表外）
+        exclude_matches = []
+        for prereq in result['prerequisites']:
+            if prereq['pending_match']:
+                exclude_matches.append(tuple(sorted([prereq['team'], prereq['pending_match']['opponent']])))
+
+        # 识别影响目标分组的其他待定比赛
+        impact_matches = self._identify_impact_matches(target_w, target_l, exclude_matches)
+        result['impact_matches'] = impact_matches
+
+        # 如果没有提供胜率，标记需要用户输入
+        if win_probabilities is None:
+            result['need_input'] = True
+            return result
+
+        # 枚举所有可能的比赛结果组合
+        from itertools import product
+
+        if not impact_matches:
+            # 没有其他影响因素，直接计算
+            match_results = {}
+            for prereq in result['prerequisites']:
+                if prereq['pending_match']:
+                    t1 = prereq['team']
+                    t2 = prereq['pending_match']['opponent']
+                    match_key = (t1, t2)
+
+                    # 根据需要的结果设置比赛结果
+                    if prereq['needs'].startswith('赢'):
+                        match_results[match_key] = 'team1_win'
+                    elif prereq['needs'].startswith('输'):
+                        match_results[match_key] = 'team2_win'
+
+            teams_in_group = self._simulate_group_with_results(target_w, target_l, match_results)
+            pairing_stats = self._calculate_pairing_probability(team1_name, team2_name, teams_in_group)
+
+            result['scenarios'].append({
+                'description': '唯一情况',
+                'probability': 1.0,
+                'new_teams': [t.name for t in teams_in_group if t.name not in [team1_name, team2_name]],
+                'pairing_stats': pairing_stats,
+            })
+            result['weighted_probability'] = pairing_stats['probability']
+        else:
+            # 有其他影响因素，枚举所有组合
+            # 为每场影响比赛生成两种结果
+            impact_match_outcomes = []
+            for match in impact_matches:
+                impact_match_outcomes.append([
+                    (match, 'team1_win'),
+                    (match, 'team2_win'),
+                ])
+
+            # 生成所有组合
+            for outcome_combo in product(*impact_match_outcomes):
+                # 构建比赛结果字典
+                match_results = {}
+
+                # 添加必要条件的比赛结果
+                for prereq in result['prerequisites']:
+                    if prereq['pending_match']:
+                        t1 = prereq['team']
+                        t2 = prereq['pending_match']['opponent']
+                        match_key = (t1, t2)
+
+                        if 'wins_needed' in prereq and prereq.get('wins_needed', 0) > 0:
+                            match_results[match_key] = 'team1_win'
+                        elif 'losses_needed' in prereq and prereq.get('losses_needed', 0) > 0:
+                            match_results[match_key] = 'team2_win'
+                        # 根据描述判断
+                        elif '赢' in prereq['needs']:
+                            match_results[match_key] = 'team1_win'
+                        elif '输' in prereq['needs']:
+                            match_results[match_key] = 'team2_win'
+
+                # 添加影响因素的比赛结果
+                scenario_prob = 1.0
+                for match, outcome in outcome_combo:
+                    t1 = match['team1']
+                    t2 = match['team2']
+                    match_key = (t1, t2)
+                    match_results[match_key] = outcome
+
+                    # 计算该结果的概率
+                    prob_key = tuple(sorted([t1, t2]))
+                    if outcome == 'team1_win':
+                        scenario_prob *= win_probabilities.get(prob_key, 0.5)
+                    else:
+                        scenario_prob *= (1 - win_probabilities.get(prob_key, 0.5))
+
+                # 模拟分组构成
+                teams_in_group = self._simulate_group_with_results(target_w, target_l, match_results)
+                pairing_stats = self._calculate_pairing_probability(team1_name, team2_name, teams_in_group)
+
+                # 构建情况描述
+                new_teams = [t.name for t in teams_in_group if t.name not in [team1_name, team2_name]]
+
+                result['scenarios'].append({
+                    'description': f"情况 {len(result['scenarios']) + 1}",
+                    'probability': scenario_prob,
+                    'new_teams': new_teams,
+                    'pairing_stats': pairing_stats,
+                    'match_results': outcome_combo,
+                })
+
+                result['weighted_probability'] += scenario_prob * pairing_stats['probability']
+
+        return result
+
     def _calculate_cross_group_paths(self, team1: Team, team2: Team) -> List[Dict]:
         """
         计算两支不同战绩队伍可能相遇的路径（条件概率）
+
+        注意：此方法已被 calculate_cross_group_probability_interactive 替代，
+        但保留用于向后兼容。
 
         Args:
             team1: 队伍1
@@ -324,6 +767,49 @@ class ProbabilityCalculator:
 
         # 检查是否在同一战绩组
         if team1.record == team2.record:
+            # 检查两队是否都已确定当前组的对手（有待定比赛）
+            team1_has_pending = team1.match_history and team1.match_history[-1][1] is None
+            team2_has_pending = team2.match_history and team2.match_history[-1][1] is None
+
+            # 如果两队都有待定对手，检查是否对阵的是彼此
+            if team1_has_pending and team2_has_pending:
+                team1_pending_opponent = team1.match_history[-1][0]
+                team2_pending_opponent = team2.match_history[-1][0]
+
+                # 如果他们的待定对手不是彼此，说明无法在当前组相遇
+                if team1_pending_opponent != team2_name or team2_pending_opponent != team1_name:
+                    # 他们已经确定了其他对手，无法在当前组相遇
+                    # 转向跨组计算
+                    result['same_group'] = False
+                    result['can_meet_directly'] = False
+                    result['reason'] = f"两队虽然战绩相同（{team1.record}），但已确定对阵其他队伍（{team1_name} vs {team1_pending_opponent}, {team2_name} vs {team2_pending_opponent}）"
+
+                    # 使用交互式计算检查跨组相遇可能（跳过当前组）
+                    interactive_result = self.calculate_cross_group_probability_interactive(
+                        team1_name, team2_name, None, skip_current_record=True
+                    )
+
+                    if interactive_result.get('need_input'):
+                        result['need_interactive'] = True
+                        result['interactive_data'] = interactive_result
+                        result['explanation'] = (
+                            f"{team1_name} 和 {team2_name} 当前都在 {team1.record} 组，但已经确定了本轮对手。\n"
+                            f"  • {team1_name} 将对阵 {team1_pending_opponent}\n"
+                            f"  • {team2_name} 将对阵 {team2_pending_opponent}\n\n"
+                            f"两队只能在后续轮次（根据比赛结果进入新的分组）相遇。\n"
+                            f"系统需要您输入相关比赛的胜率估算才能计算精确概率。"
+                        )
+                    elif interactive_result.get('explanation'):
+                        result['explanation'] = (
+                            f"{team1_name} 和 {team2_name} 当前都在 {team1.record} 组，但已经确定了本轮对手。\n"
+                            f"  • {team1_name} 将对阵 {team1_pending_opponent}\n"
+                            f"  • {team2_name} 将对阵 {team2_pending_opponent}\n\n"
+                            + interactive_result['explanation']
+                        )
+
+                    return result
+
+            # 可以在当前组相遇
             result['same_group'] = True
             result['can_meet_directly'] = True
 
@@ -374,29 +860,43 @@ class ProbabilityCalculator:
 
             return result
         else:
-            # 不在同一组，计算跨分组相遇路径
+            # 不在同一组，使用交互式计算检查是否需要用户输入
             result['same_group'] = False
             result['can_meet_directly'] = False
             result['reason'] = f"战绩不同（{team1_name}: {team1.record}, {team2_name}: {team2.record}）"
 
-            # 计算可能的相遇路径
-            paths = self._calculate_cross_group_paths(team1, team2)
-            result['paths'] = paths
+            # 先调用交互式计算检查是否需要用户输入
+            interactive_result = self.calculate_cross_group_probability_interactive(team1_name, team2_name, None)
 
-            if paths:
+            if interactive_result.get('need_input'):
+                # 需要用户输入，返回相关信息
+                result['need_interactive'] = True
+                result['interactive_data'] = interactive_result
                 result['explanation'] = (
                     f"{team1_name} 当前战绩 {team1.record}，{team2_name} 当前战绩 {team2.record}。\n\n"
                     f"两队不在同一分组，需要通过比赛结果移动到相同分组才能相遇。\n"
-                    f"以下是可能的相遇路径及其条件概率：\n"
+                    f"系统需要您输入相关比赛的胜率估算才能计算精确概率。"
                 )
-
-                # 不计算总概率，因为现在是条件概率
-                result['probability'] = 0.0  # 标记为0，表示这是条件概率情况
+            elif interactive_result.get('explanation'):
+                # 无法到达共同分组
+                result['explanation'] = interactive_result['explanation']
             else:
-                result['explanation'] = (
-                    f"{team1_name} ({team1.record}) 和 {team2_name} ({team2.record}) "
-                    f"在当前状态下无法在后续轮次相遇。"
-                )
+                # 可以计算但没有影响因素（旧的条件概率路径）
+                paths = self._calculate_cross_group_paths(team1, team2)
+                result['paths'] = paths
+
+                if paths:
+                    result['explanation'] = (
+                        f"{team1_name} 当前战绩 {team1.record}，{team2_name} 当前战绩 {team2.record}。\n\n"
+                        f"两队不在同一分组，需要通过比赛结果移动到相同分组才能相遇。\n"
+                        f"以下是可能的相遇路径及其条件概率：\n"
+                    )
+                    result['probability'] = 0.0
+                else:
+                    result['explanation'] = (
+                        f"{team1_name} ({team1.record}) 和 {team2_name} ({team2.record}) "
+                        f"在当前状态下无法在后续轮次相遇。"
+                    )
 
             return result
 

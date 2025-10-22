@@ -513,11 +513,11 @@ def simulate_advancement():
         return
 
     console.print("\n[bold]当前仍在比赛的队伍:[/bold]")
-    for team in active_teams:
+    for i, team in enumerate(active_teams, 1):
         team_obj = stage.get_team_by_name(team)
-        console.print(f"  • {team} ({team_obj.record})")
+        console.print(f"  {i}. {team} ({team_obj.record})")
 
-    team_name = Prompt.ask("\n请输入要模拟的队伍名称").upper()
+    team_name = get_team_input("\n请输入要模拟的队伍名称或序号", active_teams)
 
     try:
         num_sims = int(Prompt.ask("模拟次数", default="10000"))
@@ -558,7 +558,16 @@ def view_team_details():
     """查看队伍详情"""
     stage = load_current_swiss_stage()
 
-    team_name = Prompt.ask("请输入队伍名称").upper()
+    # 获取所有队伍（包括已晋级和已淘汰的）
+    all_teams = [t.name for t in stage.teams]
+
+    console.print("\n[bold]所有队伍:[/bold]")
+    for i, team in enumerate(all_teams, 1):
+        team_obj = stage.get_team_by_name(team)
+        if team_obj:
+            console.print(f"  {i}. {team} ({team_obj.record})")
+
+    team_name = get_team_input("\n请输入队伍名称或序号", all_teams)
     stats = get_team_stats(team_name)
 
     if not stats:

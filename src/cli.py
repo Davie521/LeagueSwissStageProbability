@@ -370,6 +370,15 @@ def _generate_heatmap_image(teams: list, matrix: dict, stage, team_probabilities
         console.print("[yellow]没有队伍数据，无法生成热力图[/yellow]")
         return
 
+    # 过滤掉进入概率为0的队伍（只保留能进入2-2组的队伍）
+    if team_probabilities:
+        filtered_teams = [t for t in teams if team_probabilities.get(t, 0.0) > 0]
+        if not filtered_teams:
+            console.print("[yellow]没有队伍能够进入2-2组，无法生成热力图[/yellow]")
+            return
+        teams = filtered_teams
+        console.print(f"[dim]热力图将只显示能够进入2-2组的 {len(teams)} 支队伍[/dim]")
+
     # 创建矩阵数据
     n = len(teams)
     matrix_data = np.zeros((n, n))
@@ -387,8 +396,9 @@ def _generate_heatmap_image(teams: list, matrix: dict, stage, team_probabilities
                 if team1_obj and team2_obj and t2 in team1_obj.opponents_played:
                     mask[i, j] = True
 
-    # 创建图表
-    fig, ax = plt.subplots(figsize=(16, 14))
+    # 创建图表（根据队伍数量调整大小）
+    base_size = max(10, n * 1.2)  # 动态调整大小
+    fig, ax = plt.subplots(figsize=(base_size, base_size * 0.9))
 
     # 使用seaborn绘制热力图
     sns.heatmap(
@@ -428,11 +438,14 @@ def _generate_heatmap_image(teams: list, matrix: dict, stage, team_probabilities
     # 添加队伍进入概率的注释（如果提供）
     if team_probabilities:
         prob_text = "各队进入2-2组概率:\n"
+        count = 0
         for team in teams:
             prob = team_probabilities.get(team, 0.0)
-            prob_text += f"{team}: {prob:.1%}  "
-            if (teams.index(team) + 1) % 5 == 0:
-                prob_text += "\n"
+            if prob > 0:  # 只显示概率>0的队伍
+                prob_text += f"{team}: {prob:.1%}  "
+                count += 1
+                if count % 5 == 0:
+                    prob_text += "\n"
 
         plt.figtext(0.5, 0.02, prob_text, ha='center', fontsize=9,
                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))

@@ -315,11 +315,14 @@ def calculate_2_2_matchup_matrix():
 
             console.print(team_prob_table)
 
-            # 显示加权平均的配对概率矩阵（热力图风格）
+            # 生成配对概率矩阵热力图
             console.print("\n" + "━"*60)
             console.print("[bold cyan]🔥 2-2组配对概率矩阵（加权平均）[/bold cyan]\n")
 
             _display_probability_heatmap(final_result['all_possible_teams'], final_result['matrix'], stage)
+
+            # 生成热力图图片
+            _generate_heatmap_image(final_result['all_possible_teams'], final_result['matrix'], stage, final_result['team_probabilities'])
 
             # 询问是否查看详细场景
             console.print("\n" + "━"*60)
@@ -349,6 +352,98 @@ def calculate_2_2_matchup_matrix():
         import traceback
         console.print("[dim]详细错误信息:[/dim]")
         console.print(traceback.format_exc(), style="dim", markup=False)
+
+
+def _generate_heatmap_image(teams: list, matrix: dict, stage, team_probabilities: dict = None):
+    """
+    生成配对概率矩阵热力图图片
+
+    Args:
+        teams: 队伍列表
+        matrix: 概率矩阵字典 {(team1, team2): probability}
+        stage: SwissStage 对象
+        team_probabilities: 队伍进入2-2组的概率（可选）
+    """
+    import numpy as np
+
+    if not teams:
+        console.print("[yellow]没有队伍数据，无法生成热力图[/yellow]")
+        return
+
+    # 创建矩阵数据
+    n = len(teams)
+    matrix_data = np.zeros((n, n))
+    mask = np.zeros((n, n), dtype=bool)  # 用于标记已交手的格子
+
+    for i, t1 in enumerate(teams):
+        for j, t2 in enumerate(teams):
+            if i != j:
+                prob = matrix.get((t1, t2), 0.0)
+                matrix_data[i, j] = prob * 100  # 转换为百分比
+
+                # 检查是否已交手
+                team1_obj = stage.get_team_by_name(t1)
+                team2_obj = stage.get_team_by_name(t2)
+                if team1_obj and team2_obj and t2 in team1_obj.opponents_played:
+                    mask[i, j] = True
+
+    # 创建图表
+    fig, ax = plt.subplots(figsize=(16, 14))
+
+    # 使用seaborn绘制热力图
+    sns.heatmap(
+        matrix_data,
+        annot=True,
+        fmt='.1f',
+        cmap='YlOrRd',
+        xticklabels=teams,
+        yticklabels=teams,
+        cbar_kws={'label': '配对概率 (%)'},
+        square=True,
+        linewidths=0.5,
+        linecolor='gray',
+        vmin=0,
+        vmax=50,  # 设置上限为50%，突出高概率
+        ax=ax,
+        annot_kws={'size': 9}
+    )
+
+    # 标记已交手的格子（用灰色X标记）
+    for i in range(n):
+        for j in range(n):
+            if mask[i, j]:
+                ax.text(j + 0.5, i + 0.5, 'X', ha='center', va='center',
+                       fontsize=16, color='gray', alpha=0.5, weight='bold')
+
+    # 设置标题和标签
+    plt.title('2-2组配对概率矩阵（加权平均）\n已交手的对阵标记为 X',
+             fontsize=18, fontweight='bold', pad=20)
+    plt.xlabel('队伍', fontsize=13, fontweight='bold')
+    plt.ylabel('队伍', fontsize=13, fontweight='bold')
+
+    # 旋转标签
+    plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=0)
+
+    # 添加队伍进入概率的注释（如果提供）
+    if team_probabilities:
+        prob_text = "各队进入2-2组概率:\n"
+        for team in teams:
+            prob = team_probabilities.get(team, 0.0)
+            prob_text += f"{team}: {prob:.1%}  "
+            if (teams.index(team) + 1) % 5 == 0:
+                prob_text += "\n"
+
+        plt.figtext(0.5, 0.02, prob_text, ha='center', fontsize=9,
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+
+    # 保存图片
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = OUTPUT_DIR / f"matchup_matrix_2_2_{timestamp}.png"
+    plt.savefig(filename, dpi=300, bbox_inches='tight', facecolor='white', pad_inches=0.3)
+    plt.close()
+
+    console.print(f"\n[green]✅ 2-2组配对概率矩阵热力图已保存至: {filename}[/green]")
 
 
 def _display_probability_heatmap(teams: list, matrix: dict, stage, compact: bool = False):

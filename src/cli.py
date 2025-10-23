@@ -429,11 +429,10 @@ def _generate_heatmap_image(teams: list, matrix: dict, stage, team_probabilities
         label_size = 12
         tick_size = 10
 
-    # 使用seaborn绘制热力图
+    # 使用seaborn绘制热力图（不带注释，后面手动添加以控制颜色）
     sns.heatmap(
         matrix_data,
-        annot=True,
-        fmt='.1f',
+        annot=False,  # 先不添加注释
         cmap=cmap,
         xticklabels=teams,
         yticklabels=teams,
@@ -448,9 +447,21 @@ def _generate_heatmap_image(teams: list, matrix: dict, stage, team_probabilities
         linecolor='#e0e0e0',
         vmin=0,
         vmax=max(40, matrix_data.max()),  # 动态设置上限
-        ax=ax,
-        annot_kws={'size': annot_size, 'weight': 'bold', 'color': '#2c3e50'}
+        ax=ax
     )
+
+    # 手动添加注释，根据背景色自动选择字体颜色
+    threshold = max(40, matrix_data.max()) / 2  # 中间值作为阈值
+    for i in range(n):
+        for j in range(n):
+            if i != j:  # 跳过对角线
+                value = matrix_data[i, j]
+                # 根据背景色深浅选择字体颜色
+                text_color = 'white' if value > threshold else '#2c3e50'
+                ax.text(j + 0.5, i + 0.5, f'{value:.1f}',
+                       ha='center', va='center',
+                       fontsize=annot_size, weight='bold',
+                       color=text_color, zorder=5)
 
     # 标记已交手的格子（用更明显的样式）
     for i in range(n):
@@ -470,13 +481,13 @@ def _generate_heatmap_image(teams: list, matrix: dict, stage, team_probabilities
                                           fill=True, facecolor='#ecf0f1',
                                           alpha=0.5, zorder=10))
 
-    # 美化标题
+    # 美化标题（增加间距避免重叠）
     title_text = '2-2 组配对概率矩阵（加权平均）'
     subtitle_text = '✕ = 已交手无法再次对阵'
 
     plt.title(title_text, fontsize=title_size, fontweight='bold',
-             pad=15, color='#2c3e50', loc='center')
-    plt.text(0.5, 1.02, subtitle_text, transform=ax.transAxes,
+             pad=25, color='#2c3e50', loc='center')  # 增加 pad 避免重叠
+    plt.text(0.5, 1.04, subtitle_text, transform=ax.transAxes,  # 调整位置
             fontsize=title_size - 6, ha='center', va='bottom',
             color='#7f8c8d', style='italic')
 
@@ -527,14 +538,18 @@ def _generate_heatmap_image(teams: list, matrix: dict, stage, team_probabilities
         if current_line:  # 添加剩余的队伍
             prob_lines.append("    ".join(current_line))
 
-        prob_text = "各队进入2-2组概率\n" + "\n".join(prob_lines)
-        prob_text += f"\n\n● 已在2-2组 (100%)    ◆ 高概率 (≥50%)    ◇ 低概率 (<50%)"
+        # 构建注释文本（使用更清晰的格式）
+        prob_header = "各队进入2-2组概率"
+        prob_body = "\n".join(prob_lines)
+        prob_legend = "● 已在2-2组 (100%)    ◆ 高概率 (≥50%)    ◇ 低概率 (<50%)"
 
-        # 美化的注释框
+        prob_text = f"{prob_header}\n{prob_body}\n\n{prob_legend}"
+
+        # 美化的注释框（浅色背景，深色字体）
         plt.figtext(0.5, 0.01, prob_text, ha='center', fontsize=10,
-                   bbox=dict(boxstyle='round,pad=0.8', facecolor='#ecf0f1',
-                            edgecolor='#95a5a6', linewidth=2, alpha=0.9),
-                   color='#2c3e50')
+                   bbox=dict(boxstyle='round,pad=0.8', facecolor='#f8f9fa',
+                            edgecolor='#6c757d', linewidth=2, alpha=0.95),
+                   color='#212529', weight='500')
 
     # 调整布局，为底部注释框留出空间
     if team_probabilities:

@@ -468,14 +468,10 @@ def _generate_heatmap_image(teams: list, matrix: dict, stage, team_probabilities
     for i in range(n):
         for j in range(n):
             if mask[i, j]:
-                # 已交手：添加深灰色覆盖层，不显示X
+                # 已交手：只添加灰色覆盖层，不显示任何文字
                 ax.add_patch(plt.Rectangle((j, i), 1, 1,
-                                          fill=True, facecolor='#95a5a6',
-                                          alpha=0.6, zorder=10))
-                # 添加"已交手"文字提示
-                ax.text(j + 0.5, i + 0.5, '已交手', ha='center', va='center',
-                       fontsize=annot_size - 1, color='white',
-                       weight='bold', zorder=11)
+                                          fill=True, facecolor='#bdc3c7',
+                                          alpha=0.7, zorder=10))
             elif i == j:
                 # 对角线用不同颜色标记
                 ax.add_patch(plt.Rectangle((j, i), 1, 1,

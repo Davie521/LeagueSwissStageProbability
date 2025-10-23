@@ -397,63 +397,155 @@ def _generate_heatmap_image(teams: list, matrix: dict, stage, team_probabilities
                     mask[i, j] = True
 
     # 创建图表（根据队伍数量调整大小）
-    base_size = max(10, n * 1.2)  # 动态调整大小
-    fig, ax = plt.subplots(figsize=(base_size, base_size * 0.9))
+    base_size = max(12, n * 1.5)  # 更大的基础尺寸
+    fig, ax = plt.subplots(figsize=(base_size, base_size * 0.85))
+
+    # 设置背景色
+    fig.patch.set_facecolor('white')
+    ax.set_facecolor('white')
+
+    # 使用更好看的颜色方案
+    # 创建自定义颜色映射：白色 -> 浅蓝 -> 蓝色 -> 紫色 -> 红色
+    from matplotlib.colors import LinearSegmentedColormap
+    colors = ['#f7fbff', '#deebf7', '#c6dbef', '#9ecae1', '#6baed6',
+              '#4292c6', '#2171b5', '#08519c', '#08306b']
+    n_bins = 100
+    cmap = LinearSegmentedColormap.from_list('custom_blue', colors, N=n_bins)
+
+    # 计算字体大小（根据矩阵大小自适应）
+    if n <= 6:
+        annot_size = 11
+        title_size = 20
+        label_size = 14
+        tick_size = 12
+    elif n <= 8:
+        annot_size = 10
+        title_size = 18
+        label_size = 13
+        tick_size = 11
+    else:
+        annot_size = 9
+        title_size = 16
+        label_size = 12
+        tick_size = 10
 
     # 使用seaborn绘制热力图
     sns.heatmap(
         matrix_data,
         annot=True,
         fmt='.1f',
-        cmap='YlOrRd',
+        cmap=cmap,
         xticklabels=teams,
         yticklabels=teams,
-        cbar_kws={'label': '配对概率 (%)'},
+        cbar_kws={
+            'label': '配对概率 (%)',
+            'shrink': 0.8,
+            'aspect': 20,
+            'pad': 0.02
+        },
         square=True,
-        linewidths=0.5,
-        linecolor='gray',
+        linewidths=1.5,
+        linecolor='#e0e0e0',
         vmin=0,
-        vmax=50,  # 设置上限为50%，突出高概率
+        vmax=max(40, matrix_data.max()),  # 动态设置上限
         ax=ax,
-        annot_kws={'size': 9}
+        annot_kws={'size': annot_size, 'weight': 'bold', 'color': '#2c3e50'}
     )
 
-    # 标记已交手的格子（用灰色X标记）
+    # 标记已交手的格子（用更明显的样式）
     for i in range(n):
         for j in range(n):
             if mask[i, j]:
-                ax.text(j + 0.5, i + 0.5, 'X', ha='center', va='center',
-                       fontsize=16, color='gray', alpha=0.5, weight='bold')
+                # 添加半透明灰色覆盖层
+                ax.add_patch(plt.Rectangle((j, i), 1, 1,
+                                          fill=True, facecolor='gray',
+                                          alpha=0.3, zorder=10))
+                # 添加X标记
+                ax.text(j + 0.5, i + 0.5, '✕', ha='center', va='center',
+                       fontsize=annot_size + 6, color='#7f8c8d',
+                       alpha=0.8, weight='bold', zorder=11)
+            elif i == j:
+                # 对角线用不同颜色标记
+                ax.add_patch(plt.Rectangle((j, i), 1, 1,
+                                          fill=True, facecolor='#ecf0f1',
+                                          alpha=0.5, zorder=10))
 
-    # 设置标题和标签
-    plt.title('2-2组配对概率矩阵（加权平均）\n已交手的对阵标记为 X',
-             fontsize=18, fontweight='bold', pad=20)
-    plt.xlabel('队伍', fontsize=13, fontweight='bold')
-    plt.ylabel('队伍', fontsize=13, fontweight='bold')
+    # 美化标题
+    title_text = '2-2 组配对概率矩阵（加权平均）'
+    subtitle_text = '✕ = 已交手无法再次对阵'
 
-    # 旋转标签
-    plt.xticks(rotation=45, ha='right')
-    plt.yticks(rotation=0)
+    plt.title(title_text, fontsize=title_size, fontweight='bold',
+             pad=15, color='#2c3e50', loc='center')
+    plt.text(0.5, 1.02, subtitle_text, transform=ax.transAxes,
+            fontsize=title_size - 6, ha='center', va='bottom',
+            color='#7f8c8d', style='italic')
 
-    # 添加队伍进入概率的注释（如果提供）
+    # 美化轴标签
+    plt.xlabel('对手队伍', fontsize=label_size, fontweight='bold',
+              color='#34495e', labelpad=10)
+    plt.ylabel('队伍', fontsize=label_size, fontweight='bold',
+              color='#34495e', labelpad=10)
+
+    # 旋转和美化刻度标签
+    ax.set_xticklabels(teams, rotation=45, ha='right', fontsize=tick_size,
+                       fontweight='600', color='#2c3e50')
+    ax.set_yticklabels(teams, rotation=0, fontsize=tick_size,
+                       fontweight='600', color='#2c3e50')
+
+    # 美化colorbar
+    cbar = ax.collections[0].colorbar
+    cbar.ax.tick_params(labelsize=tick_size - 1, colors='#2c3e50')
+    cbar.set_label('配对概率 (%)', fontsize=label_size - 1,
+                  color='#2c3e50', fontweight='bold')
+
+    # 添加队伍进入概率的美化注释框
     if team_probabilities:
-        prob_text = "各队进入2-2组概率:\n"
+        prob_lines = []
+        current_line = []
         count = 0
-        for team in teams:
-            prob = team_probabilities.get(team, 0.0)
-            if prob > 0:  # 只显示概率>0的队伍
-                prob_text += f"{team}: {prob:.1%}  "
-                count += 1
-                if count % 5 == 0:
-                    prob_text += "\n"
 
-        plt.figtext(0.5, 0.02, prob_text, ha='center', fontsize=9,
-                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+        # 按概率排序
+        sorted_teams = sorted([(t, team_probabilities.get(t, 0.0)) for t in teams],
+                            key=lambda x: x[1], reverse=True)
+
+        for team, prob in sorted_teams:
+            if prob > 0:
+                # 根据概率添加颜色标记
+                if prob == 1.0:
+                    marker = '●'  # 已在2-2组
+                elif prob >= 0.5:
+                    marker = '◆'  # 高概率
+                else:
+                    marker = '◇'  # 低概率
+
+                current_line.append(f"{marker} {team}: {prob:.1%}")
+                count += 1
+                if count % 4 == 0:  # 每行4个队伍
+                    prob_lines.append("    ".join(current_line))
+                    current_line = []
+
+        if current_line:  # 添加剩余的队伍
+            prob_lines.append("    ".join(current_line))
+
+        prob_text = "各队进入2-2组概率\n" + "\n".join(prob_lines)
+        prob_text += f"\n\n● 已在2-2组 (100%)    ◆ 高概率 (≥50%)    ◇ 低概率 (<50%)"
+
+        # 美化的注释框
+        plt.figtext(0.5, 0.01, prob_text, ha='center', fontsize=10,
+                   bbox=dict(boxstyle='round,pad=0.8', facecolor='#ecf0f1',
+                            edgecolor='#95a5a6', linewidth=2, alpha=0.9),
+                   color='#2c3e50')
+
+    # 调整布局，为底部注释框留出空间
+    if team_probabilities:
+        plt.subplots_adjust(bottom=0.20)  # 为底部注释框留出空间
+    else:
+        plt.subplots_adjust(bottom=0.10)
 
     # 保存图片
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = OUTPUT_DIR / f"matchup_matrix_2_2_{timestamp}.png"
-    plt.savefig(filename, dpi=300, bbox_inches='tight', facecolor='white', pad_inches=0.3)
+    plt.savefig(filename, dpi=300, bbox_inches='tight', facecolor='white', pad_inches=0.5)
     plt.close()
 
     console.print(f"\n[green]✅ 2-2组配对概率矩阵热力图已保存至: {filename}[/green]")

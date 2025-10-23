@@ -451,7 +451,8 @@ def _generate_heatmap_image(teams: list, matrix: dict, stage, team_probabilities
     )
 
     # 手动添加注释，根据背景色自动选择字体颜色
-    threshold = max(40, matrix_data.max()) / 2  # 中间值作为阈值
+    # 使用更低的阈值，让更多格子使用白色字体
+    threshold = max(40, matrix_data.max()) * 0.35  # 35%作为阈值（之前是50%）
     for i in range(n):
         for j in range(n):
             if i != j:  # 跳过对角线
@@ -463,33 +464,29 @@ def _generate_heatmap_image(teams: list, matrix: dict, stage, team_probabilities
                        fontsize=annot_size, weight='bold',
                        color=text_color, zorder=5)
 
-    # 标记已交手的格子（用更明显的样式）
+    # 标记已交手的格子和对角线
     for i in range(n):
         for j in range(n):
             if mask[i, j]:
-                # 添加半透明灰色覆盖层
+                # 已交手：添加深灰色覆盖层，不显示X
                 ax.add_patch(plt.Rectangle((j, i), 1, 1,
-                                          fill=True, facecolor='gray',
-                                          alpha=0.3, zorder=10))
-                # 添加X标记
-                ax.text(j + 0.5, i + 0.5, '✕', ha='center', va='center',
-                       fontsize=annot_size + 6, color='#7f8c8d',
-                       alpha=0.8, weight='bold', zorder=11)
+                                          fill=True, facecolor='#95a5a6',
+                                          alpha=0.6, zorder=10))
+                # 添加"已交手"文字提示
+                ax.text(j + 0.5, i + 0.5, '已交手', ha='center', va='center',
+                       fontsize=annot_size - 1, color='white',
+                       weight='bold', zorder=11)
             elif i == j:
                 # 对角线用不同颜色标记
                 ax.add_patch(plt.Rectangle((j, i), 1, 1,
                                           fill=True, facecolor='#ecf0f1',
                                           alpha=0.5, zorder=10))
 
-    # 美化标题（增加间距避免重叠）
+    # 美化标题（不要副标题）
     title_text = '2-2 组配对概率矩阵（加权平均）'
-    subtitle_text = '✕ = 已交手无法再次对阵'
 
     plt.title(title_text, fontsize=title_size, fontweight='bold',
-             pad=25, color='#2c3e50', loc='center')  # 增加 pad 避免重叠
-    plt.text(0.5, 1.04, subtitle_text, transform=ax.transAxes,  # 调整位置
-            fontsize=title_size - 6, ha='center', va='bottom',
-            color='#7f8c8d', style='italic')
+             pad=20, color='#2c3e50', loc='center')
 
     # 美化轴标签
     plt.xlabel('对手队伍', fontsize=label_size, fontweight='bold',
@@ -538,12 +535,11 @@ def _generate_heatmap_image(teams: list, matrix: dict, stage, team_probabilities
         if current_line:  # 添加剩余的队伍
             prob_lines.append("    ".join(current_line))
 
-        # 构建注释文本（使用更清晰的格式）
+        # 构建注释文本（不包含图例）
         prob_header = "各队进入2-2组概率"
         prob_body = "\n".join(prob_lines)
-        prob_legend = "● 已在2-2组 (100%)    ◆ 高概率 (≥50%)    ◇ 低概率 (<50%)"
 
-        prob_text = f"{prob_header}\n{prob_body}\n\n{prob_legend}"
+        prob_text = f"{prob_header}\n{prob_body}"
 
         # 美化的注释框（浅色背景，深色字体）
         plt.figtext(0.5, 0.01, prob_text, ha='center', fontsize=10,
